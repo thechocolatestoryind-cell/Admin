@@ -1,7 +1,8 @@
 import { el, toast, confirmDialog, safeUrl } from "../common.js";
 import { field, input, check, showErrors, stateBox } from "../ui/forms.js";
 import { createImageField } from "../ui/imagefield.js";
-import { listAll, createItem, updateItem, deleteItem, reorder, deleteHighlightCascade } from "../services/content.js";
+import { createUploader } from "../ui/uploader.js";
+import { listAll, createItem, updateItem, deleteItem, reorder, deleteHighlightCascade, createSlidesBatch } from "../services/content.js";
 import { validateHighlight, validateSlide, orphanSlides } from "../services/content-logic.js";
 import { COL } from "../collections.js";
 import { describeError } from "../services/util.js";
@@ -50,7 +51,7 @@ export async function render(host) {
 
   function slidePanel(h) {
     const own = slidesOf(h.id), box = el("div", { class: "slides-panel" }), formHost = el("div");
-    box.append(el("div", { class: "row between" }, el("h3", { text: "Slides in \u201C" + h.title + "\u201D" }), el("button", { class: "btn btn-small", type: "button", text: "Add slide", onclick: () => slideForm(formHost, h, null) })), formHost,
+    box.append(el("div", { class: "row between" }, el("h3", { text: "Slides in \u201C" + h.title + "\u201D" }), el("div", { class: "row" }, el("button", { class: "btn btn-small", type: "button", text: "Add slide", onclick: () => slideForm(formHost, h, null) }), el("button", { class: "btn btn-small", type: "button", text: "Add multiple slides", onclick: () => bulkForm(formHost, h) }))), formHost,
       own.length ? el("ul", { class: "rows" }, own.map((s, i) => el("li", { class: "row-card" }, thumb(s.imageURL),
         el("div", { class: "grow" }, el("p", { class: "wrap", text: s.caption || "(no caption)" }), el("p", { class: "small muted wrap", text: s.linkURL ? "Links to " + s.linkURL : "No link" }), el("p", { class: "badges" }, badgeA(s.isActive), el("span", { class: "badge badge-off", text: "Order " + (s.sortOrder ?? "\u2014") }))),
         el("div", { class: "row actions" },
@@ -60,6 +61,37 @@ export async function render(host) {
           el("button", { class: "btn btn-quiet btn-small", type: "button", disabled: busy, text: s.isActive ? "Deactivate" : "Activate", onclick: () => toggle(COL.highlightItems, s, s.imageURL, "slide image") }),
           el("button", { class: "btn btn-quiet btn-small danger-text", type: "button", disabled: busy, text: "Delete", onclick: () => delSlide(s) }))))) : el("p", { class: "muted small", text: "No slides yet." }));
     return box;
+  }
+  function bulkForm(hostEl, h) {
+    let urls = [];
+    const grid = el("ul", { class: "uploads" }), info = el("p", { class: "small muted", role: "status", text: "No images added yet." });
+    const active = check("Make all these slides Active", true);
+    const save = el("button", { class: "btn", type: "button", text: "Add slides", disabled: true });
+    const drawGrid = () => {
+      grid.replaceChildren(...urls.map((u, i) => el("li", { class: "upload-item" }, el("img", { src: safeUrl(u) || "", alt: "", width: 56, height: 56 }),
+        el("div", { class: "grow" }, el("p", { class: "small", text: "Slide " + (slidesOf(h.id).length + i + 1) })),
+        el("button", { type: "button", class: "btn btn-quiet btn-small", text: "Remove", onclick: () => { urls.splice(i, 1); drawGrid(); } }))));
+      info.textContent = urls.length ? urls.length + " image(s) ready. Order is the order you picked them." : "No images added yet.";
+      save.disabled = !urls.length; save.textContent = urls.length ? "Add " + urls.length + " slide(s)" : "Add slides";
+    };
+    const up = createUploader({ multiple: true, remaining: () => 450 - urls.length, onUploaded: u => { urls.push(u); drawGrid(); } });
+    save.addEventListener("click", async () => {
+      if (busy || !urls.length) return;
+      if ([...up.element.querySelectorAll("progress")].some(p => !p.hidden && p.value < 100)) { toast("Some images are still uploading. Wait for them to finish.", "error"); return; }
+      const mine = slidesOf(h.id), start = Math.max(mine.length, ...mine.map(s => Number(s.sortOrder) || 0)) + 1, rows = [];
+      for (let i = 0; i < urls.length; i++) {
+        const { errors, data } = validateSlide({ highlightId: h.id, imageURL: urls[i], caption: "", linkURL: "", isActive: active.input.checked, sortOrder: start + i });
+        if (errors.length) { toast(errors[0].msg, "error"); return; } rows.push(data);
+      }
+      busy = true; save.disabled = true; save.textContent = "Saving\u2026";
+      try { const n = await createSlidesBatch(rows); toast(n + " slide(s) added.", "success"); await reload(); hostEl.replaceChildren(); }
+      catch (e) { toast("The images are uploaded to Cloudinary but the slides were NOT saved. " + describeError(e), "error"); }
+      finally { busy = false; draw(); }
+    });
+    hostEl.replaceChildren(el("section", { class: "card" }, el("h3", { text: "Add multiple slides" }),
+      el("p", { class: "small muted", text: "Select many images at once. Caption and link can be added later with Edit." }),
+      up.element, info, grid, el("div", { class: "field" }, active.node),
+      el("div", { class: "row" }, save, el("button", { class: "btn btn-quiet", type: "button", text: "Cancel", onclick: () => hostEl.replaceChildren() }))));
   }
   function slideForm(hostEl, h, s) {
     const cap = input({ value: s ? s.caption || "" : "", maxlength: 100 }), link = input({ value: s ? s.linkURL || "" : "", placeholder: "/products or https://\u2026" });

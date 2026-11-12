@@ -23,3 +23,11 @@ export async function deleteHighlightCascade(highlightId, slideIds) {
   assertOnline(); if (slideIds.length > 450) throw Object.assign(new Error("Too many slides"), { code: "app/too-many" });
   const b = writeBatch(db); slideIds.forEach(id => b.delete(doc(db, COL.highlightItems, id))); b.delete(doc(db, COL.highlights, highlightId)); await b.commit();
 }
+// Creates many slides in ONE atomic batch: either all are saved or none. Same fields as createItem, so no database change is needed.
+export async function createSlidesBatch(list) {
+  assertOnline(); if (!list.length) return 0;
+  if (list.length > 450) throw Object.assign(new Error("Too many slides"), { code: "app/too-many" });
+  const b = writeBatch(db);
+  list.forEach(d => b.set(doc(collection(db, COL.highlightItems)), { ...d, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+  await b.commit(); return list.length;
+}
